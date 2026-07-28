@@ -1,9 +1,10 @@
 package com.novibe.common;
 
 import com.google.gson.Gson;
-import com.novibe.common.exception.NextDnsHttpError;
+import com.novibe.common.base_structures.DnsProfile;
+import com.novibe.common.util.Jsonable;
+import com.novibe.common.exception.DnsHttpError;
 import com.novibe.common.util.Log;
-import lombok.AccessLevel;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +17,7 @@ import java.util.concurrent.Semaphore;
 
 import static java.util.Objects.isNull;
 
+@Setter(onMethod_ = @Autowired)
 public abstract class HttpRequestSender {
 
     private final Semaphore semaphore = new Semaphore(100);
@@ -31,20 +33,18 @@ public abstract class HttpRequestSender {
     protected abstract String authHeaderValue();
 
     protected abstract void react401();
-
     protected abstract void react403();
+    protected abstract void react404(DnsHttpError dnsHttpError);
 
-    @Setter(onMethod_ = @Autowired, value = AccessLevel.PACKAGE)
-    private HttpClient httpClient;
-
-    @Setter(onMethod_ = @Autowired, value = AccessLevel.PACKAGE)
-    private Gson jsonMapper;
+    protected HttpClient httpClient;
+    protected Gson jsonMapper;
+    protected DnsProfile dnsProfile;
 
     public <T> T get(String path, Class<T> responseType) {
         return sendRequest(GET, path, null, responseType);
     }
 
-    public <T, R> T post(String path, R requestBody, Class<T> responseType) {
+    public <T, R extends Jsonable> T post(String path, R requestBody, Class<T> responseType) {
         return sendRequest(POST, path, requestBody, responseType);
     }
 
@@ -54,13 +54,13 @@ public abstract class HttpRequestSender {
     }
 
     @SneakyThrows
-    protected <T, R> T sendRequest(String method, String path, R body, Class<T> responseBody) {
+    protected <T, R extends Jsonable> T sendRequest(String method, String path, R body, Class<T> responseBody) {
         URI uri = URI.create(apiUrl() + (isNull(path) ? "" : path));
         HttpRequest.BodyPublisher requestBody;
         if (isNull(body)) {
             requestBody = HttpRequest.BodyPublishers.noBody();
         } else {
-            requestBody = HttpRequest.BodyPublishers.ofString(jsonMapper.toJson(body));
+            requestBody = HttpRequest.BodyPublishers.ofString(body.toJson());
         }
         semaphore.acquire();
         HttpRequest request = HttpRequest.newBuilder(uri)
@@ -71,20 +71,13 @@ public abstract class HttpRequestSender {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         semaphore.release();
         if (response.statusCode() > 299) {
-            Log.fail("Request failed! Status: %s for %s %s\nReason: %s ".formatted(
-                    response.statusCode(),
-                    response.request().method(),
-                    response.request().uri(),
-                    response.body()));
-            if (response.statusCode() == 401) {
-                react401();
-                System.exit(1);
-            }
-            if (response.statusCode() == 403) {
-                react403();
-                System.exit(1);
-            } else {
-                throw new NextDnsHttpError(response.statusCode(), response.body());
+            DnsHttpError httpError = new DnsHttpError(response, body);
+            Log.fail(httpError.getMessage());
+            switch (response.statusCode()) {
+                case 401 -> react401();
+                case 403 -> react403();
+                case 404 -> react404(httpError);
+                default -> throw httpError;
             }
         }
         if (response.body().isEmpty()) {

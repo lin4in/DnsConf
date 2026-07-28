@@ -1,9 +1,9 @@
 package com.novibe.common.data_sources;
 
+import com.novibe.common.base_structures.HostsLine;
 import org.springframework.stereotype.Service;
 
-import java.util.regex.Pattern;
-import java.util.stream.Stream;
+import java.util.function.Predicate;
 
 @Service
 public class HostsOverrideListsLoader extends ListLoader<HostsOverrideListsLoader.BypassRoute> {
@@ -12,26 +12,19 @@ public class HostsOverrideListsLoader extends ListLoader<HostsOverrideListsLoade
     }
 
     @Override
-    protected Stream<BypassRoute> lineParser(String urlList) {
-        return Pattern.compile("\\r?\\n").splitAsStream(urlList)
-                .parallel()
-                .map(String::strip)
-                .filter(str -> !str.isBlank())
-                .filter(line -> !line.startsWith("#"))
-                .filter(line -> !HostsBlockListsLoader.isBlock(line))
-                .map(this::mapLine);
-    }
-
-    @Override
     protected String listType() {
         return "Override";
     }
 
-    private BypassRoute mapLine(String line) {
-        int delimiter = line.indexOf(" ");
-        String ip = line.substring(0, delimiter++);
-        String website = line.substring(delimiter);
-        return new BypassRoute(ip, website);
+    @Override
+    protected Predicate<HostsLine> filterRelatedLines() {
+        return line -> line.hasIpAndDomain() && !HostsBlockListsLoader.isBlockIp(line.ip());
+
+    }
+
+    @Override
+    protected BypassRoute toObject(HostsLine line) {
+        return new BypassRoute(line.ip(), line.domain());
     }
 
 }
